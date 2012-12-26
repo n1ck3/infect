@@ -1,14 +1,20 @@
 #!/bin/zsh
-
 # infect - Single file user configuration file distribution system
-
 # Written by Lowe Thiderman (lowe.thiderman@gmail.com)
 # https://github.com/thiderman/infect
-
 # Licensed under the BSD license.
 
-# install.zsh {{{
+# Preface {{{
 
+self=$(readlink -f $0)
+
+default_infect_dir="$HOME/etc"
+default_infect_web_dir="/srv/etc"
+default_infect_rsync_exclude=".git* .hg* .svn* tmp/ old-configs-backup/"
+
+# }}}
+# install.zsh {{{
+function infect_install() {
 loc=$0:a:h
 backup="$loc/old-configs-backup"
 
@@ -124,35 +130,58 @@ done
 
 # These directories are required
 mkdir -p $HOME/{.cache/vim/{backup,tmp},.logs,.local/{bin,share/zsh}} &> /dev/null
-
+}
 # }}}
-# deploy.zsh {{{
+# Deploy {{{
 
-dir="/srv/etc"
-current="current.tar.gz"
-file="$(date +"%Y.%m.%d").tar.gz"
+function infect_deploy() {
+  local src=${1:-${INFECT_DIR:-$default_infect_dir}}
+  local dest=${2:-${INFECT_WEB_DIR:-$default_infect_web_dir}}
+  local current="current.tar.gz"
+  local file="$(date +"%Y.%m.%d").tar.gz"
 
-cd $dir
-echo "Rsyncing..."
-rsync ~/etc ./ -a --exclude=".git*" --exclude="tmp/" --exclude="old-configs-backup/"
-echo "Compressing..."
-tar czf $file etc
+  echo "Deploying to $dest..."
+  if [[ ! -d $dest ]]; then
+    # Create the directory or crash.
+    if ! mkdir -p $dest ; then
+      echo "Error: Could not create destination directory. Aborting deploy."
+      return 127
+    fi
+  fi
 
-if [[ -L "$current" ]]; then
-  echo "Unlinking old..."
-  unlink $current
-fi
+  cd $dest
 
-echo "Linking new..."
-ln -s $file $current
-echo "Cleaning up..."
-rm -r $dir/etc
+  if [[ ! -f index.html ]]; then
+    echo "Installing infect script as index.html"
+    cp $self ./index.html
+  fi
 
-echo "Done! Deploy was made!"
+  local exc=""
+  for p in ${(z)INFECT_RSYNC_EXCLUDE:-$default_infect_rsync_exclude} ; do
+    exc+="--exclude=$p "
+  done
+
+  echo "Rsyncing..."
+  rsync $src ./stage -a ${(z)exc} || return 1
+
+  echo "Compressing..."
+  tar czf $file stage/ --transform 's/stage\///' --remove-files || return 1
+
+  if [[ -L "$current" ]]; then
+    echo "Unlinking old..."
+    unlink $current
+  fi
+
+  echo "Linking new..."
+  ln -s $file $current
+
+  echo "Done! Deploy was made!"
+}
 
 # }}}
 # web.zsh {{{
 
+function infect_update() {
 file="current.tar.gz"
 target="etc"
 
@@ -193,6 +222,33 @@ echo "Installing..."
 ./install.zsh
 
 echo "All done! You're up to date, baby! \o/"
+}
+# }}}
+
+# Runtime case selection {{{
+
+# No arguments given. Assume script is piped from curl; download and install
+if [[ -z "$1" ]]; then
+  infect_update
+  exit 0
+fi
+
+arg=$1
+shift
+
+case $arg in
+  symlink)
+    infect_symlink $* ; ;;
+
+  deploy)
+    infect_deploy $* ; ;;
+
+  mutate)
+    infect_mutate $* ; ;;
+
+  *)
+    infect_help ; ;;
+esac
 
 # }}}
 
