@@ -1,0 +1,199 @@
+#!/bin/zsh
+
+# infect - Single file user configuration file distribution system
+
+# Written by Lowe Thiderman (lowe.thiderman@gmail.com)
+# https://github.com/thiderman/infect
+
+# Licensed under the BSD license.
+
+# install.zsh {{{
+
+loc=$0:a:h
+backup="$loc/old-configs-backup"
+
+typeset -A apps
+typeset -A dest
+
+a=('./vim' './vim/vimrc')
+apps[vim]=$a
+
+a=('./misc/x11/Xdefaults' './misc/x11/xinitrc')
+apps[x11]=$a
+
+a=('./zsh/zshrc')
+apps[zsh]=$a
+
+a=('./tmux' './tmux/tmux.conf')
+apps[tmux]=$a
+
+a=('./luakit/')
+apps[luakit]=$a
+dest[./luakit/]="$XDG_CONFIG_HOME/luakit"
+
+a=('./misc/mplayer')
+apps[mplayer]=$a
+
+a=('./misc/mostrc')
+apps[most]=$a
+
+a=('./misc/terminfo')
+apps[terminfo]=$a
+
+a=('./misc/ncmpcpp.conf')
+apps[ncmpcpp]=$a
+dest[./misc/ncmpcpp.conf]="$HOME/.ncmpcpp/config"
+
+a=('./misc/i3.conf')
+apps[i3]=$a
+dest[./misc/i3.conf]="$HOME/.i3/config"
+
+a=('./gitconfig')
+apps[git]=$a
+
+function _link() {
+  src=$1
+  dst=$2
+  nobackup=false
+
+  if [[ -n "$3" ]]; then
+    nobackup=true
+  fi
+
+  if [[ ! -L "$dst" ]] ; then
+    if [[ -f $dst ]] || [[ -d $dst ]] ; then
+      if $nobackup; then
+        print "is local link. doing nothing."
+        return
+      fi
+      if [[ ! -d $backup ]] ; then
+        mkdir -p $backup
+      fi
+      mv $dst $backup
+      print -P "Backed up original %B%F{10}${dst}%f%b"
+    fi
+
+    mkdir -p $dst:h &> /dev/null
+    ln -s $src:a $dst:a
+    print -P "%B%F{10}${src#./}%f%b installed to %B%F{12}${dst}%b"
+  else
+    # print -P "%B%F{9}${src#./}%f%b is already installed"
+  fi
+}
+
+function _install() {
+  while [[ -n "$1" ]]; do
+    src=$1
+
+    dst=$dest[$src]
+    if [[ -z "$dst" ]]; then
+      dst="$HOME/.${${(s:/:)src}[-1]}"
+    fi
+
+    _link $src $dst
+    shift
+  done
+}
+
+if [[ -d .git ]]; then
+  # If the zshrc file does not exist, we can assume that nothing has been cloned.
+  if [[ ! -f ./zsh/zshrc ]]; then
+    git submodule init
+    git submodule update
+    git submodule foreach git submodule init
+    git submodule foreach git submodule update
+  else
+    git submodule update
+    git submodule foreach git submodule update
+  fi
+fi
+
+if [[ "$1" = "-u" ]]; then
+  # This is actually it. Since the rows above do what they do, this step
+  # really only needs to stop the script.
+  print "Git updating done"
+  exit 0
+fi
+
+# Install configs for targets found on the system
+for app in ${(ko)apps}; do
+  if [[ -x $commands[$app] ]] || [[ "$app" = "terminfo" ]] ; then
+    _install ${(z)${apps[$app]}}
+  fi
+done
+
+# These directories are required
+mkdir -p $HOME/{.cache/vim/{backup,tmp},.logs,.local/{bin,share/zsh}} &> /dev/null
+
+# }}}
+# deploy.zsh {{{
+
+dir="/srv/etc"
+current="current.tar.gz"
+file="$(date +"%Y.%m.%d").tar.gz"
+
+cd $dir
+echo "Rsyncing..."
+rsync ~/etc ./ -a --exclude=".git*" --exclude="tmp/" --exclude="old-configs-backup/"
+echo "Compressing..."
+tar czf $file etc
+
+if [[ -L "$current" ]]; then
+  echo "Unlinking old..."
+  unlink $current
+fi
+
+echo "Linking new..."
+ln -s $file $current
+echo "Cleaning up..."
+rm -r $dir/etc
+
+echo "Done! Deploy was made!"
+
+# }}}
+# web.zsh {{{
+
+file="current.tar.gz"
+target="etc"
+
+# Download and extract the tar file
+echo "Downloading..."
+curl --silent http://etc.ninjaloot.se/$file -O
+echo "Extracting..."
+tar xzf $file
+rm $file
+
+if [ -n "$1" ]; then
+  cd etc
+
+  echo $1 > .local
+  echo "Downloading $1/conf-local master zip file..."
+  curl --silent https://nodeload.github.com/$1/conf-local/zip/master -O
+
+  echo "Unzipping..."
+  unzip master &> /dev/null
+
+  echo "Syncing local files..."
+  rsync -r ./conf-local-master/* .
+  rm -r master conf-local-master
+
+  cd ..
+fi
+
+# If using old structure, sync to it.
+if [ -d "./config" ]; then
+  echo "Syncing..."
+  target="config"
+  rsync -r ./etc/* ./config
+  rm -r etc
+fi
+
+cd $target
+echo "Installing..."
+./install.zsh
+
+echo "All done! You're up to date, baby! \o/"
+
+# }}}
+
+# vim: et sts=2 sw=2 fdm=marker fmr={{{,}}}
