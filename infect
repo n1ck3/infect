@@ -6,73 +6,62 @@
 
 # Preface {{{
 
-self=$(readlink -f $0)
+SELF=$0:a
 
-default_infect_dir="$HOME/etc"
-default_infect_web_dir="/srv/etc"
-default_infect_rsync_exclude=".git* .hg* .svn* tmp/ old-configs-backup/"
+INFECT_HOST="http://infect.ninjaloot.se"
+INFECT_DIR="$HOME/etc"
+INFECT_WEB_DIR="$HOME/var/srv/infect"
+INFECT_BACKUP="backup"
+INFECT_RSYNC_EXCLUDE=".git* .hg* .svn* tmp/ $INFECT_BACKUP/"
+INFECT_RC_FILE=$HOME/.infect
+INFECT_REPO_FILE=.local
 
 # }}}
-# install.zsh {{{
+# Install {{{
+
 function infect_install() {
-loc=$0:a:h
-backup="$loc/old-configs-backup"
+  typeset -A apps
+  typeset -A dest
+  typeset -A force
 
-typeset -A apps
-typeset -A dest
+  local dir=${1:-$PWD}
+  echo $dir:a > $INFECT_RC_FILE
+  source $dir/*.src
 
-a=('./vim' './vim/vimrc')
-apps[vim]=$a
+  # Create symlinks for applications found on the system
+  for app in ${(ko)apps}; do
+    if [[ -x $commands[$app] ]] || [[ -n "$force[$app]" ]]; then
+      infect_symlink ${(z)${apps[$app]}}
+    fi
+  done
 
-a=('./misc/x11/Xdefaults' './misc/x11/xinitrc')
-apps[x11]=$a
+  # If post_infect_install is a function, run it.
+  res=$(LC_ALL=C builtin type -w post_infect_install 2>/dev/null)
+  case $res in
+    *': function')  post_infect_install;;
+  esac
+}
 
-a=('./zsh/zshrc')
-apps[zsh]=$a
+function infect_symlink() {
+  local target_dir=$(<$INFECT_RC_FILE)
 
-a=('./tmux' './tmux/tmux.conf')
-apps[tmux]=$a
+  while [[ -n "$1" ]]; do
+    local target=$1
+    local backup=$INFECT_DIR/$INFECT_BACKUP
 
-a=('./luakit/')
-apps[luakit]=$a
-dest[./luakit/]="$XDG_CONFIG_HOME/luakit"
+    # If there is a destination in the dest array, use it
+    local dst=$dest[$target]
+    if [[ -z "$dst" ]]; then
+      # If not, put directly in $HOME with a dot prefix
+      dst="$HOME/.$target:t"
+    fi
 
-a=('./misc/mplayer')
-apps[mplayer]=$a
+    src=$target_dir/$target
 
-a=('./misc/mostrc')
-apps[most]=$a
-
-a=('./misc/terminfo')
-apps[terminfo]=$a
-
-a=('./misc/ncmpcpp.conf')
-apps[ncmpcpp]=$a
-dest[./misc/ncmpcpp.conf]="$HOME/.ncmpcpp/config"
-
-a=('./misc/i3.conf')
-apps[i3]=$a
-dest[./misc/i3.conf]="$HOME/.i3/config"
-
-a=('./gitconfig')
-apps[git]=$a
-
-function _link() {
-  src=$1
-  dst=$2
-  nobackup=false
-
-  if [[ -n "$3" ]]; then
-    nobackup=true
-  fi
-
-  if [[ ! -L "$dst" ]] ; then
-    if [[ -f $dst ]] || [[ -d $dst ]] ; then
-      if $nobackup; then
-        print "is local link. doing nothing."
-        return
-      fi
-      if [[ ! -d $backup ]] ; then
+    if [[ -L $dst ]]; then
+      unlink $dst
+    elif [[ -f $dst ]] || [[ -d $dst ]]; then
+      if [[ ! -d $backup ]]; then
         mkdir -p $backup
       fi
       mv $dst $backup
@@ -81,69 +70,25 @@ function _link() {
 
     mkdir -p $dst:h &> /dev/null
     ln -s $src:a $dst:a
-    print -P "%B%F{10}${src#./}%f%b installed to %B%F{12}${dst}%b"
-  else
-    # print -P "%B%F{9}${src#./}%f%b is already installed"
-  fi
-}
+    print -P "%B%F{10}$1%f%b installed to %B%F{12}${dst}%b"
 
-function _install() {
-  while [[ -n "$1" ]]; do
-    src=$1
-
-    dst=$dest[$src]
-    if [[ -z "$dst" ]]; then
-      dst="$HOME/.${${(s:/:)src}[-1]}"
-    fi
-
-    _link $src $dst
     shift
   done
 }
 
-if [[ -d .git ]]; then
-  # If the zshrc file does not exist, we can assume that nothing has been cloned.
-  if [[ ! -f ./zsh/zshrc ]]; then
-    git submodule init
-    git submodule update
-    git submodule foreach git submodule init
-    git submodule foreach git submodule update
-  else
-    git submodule update
-    git submodule foreach git submodule update
-  fi
-fi
-
-if [[ "$1" = "-u" ]]; then
-  # This is actually it. Since the rows above do what they do, this step
-  # really only needs to stop the script.
-  print "Git updating done"
-  exit 0
-fi
-
-# Install configs for targets found on the system
-for app in ${(ko)apps}; do
-  if [[ -x $commands[$app] ]] || [[ "$app" = "terminfo" ]] ; then
-    _install ${(z)${apps[$app]}}
-  fi
-done
-
-# These directories are required
-mkdir -p $HOME/{.cache/vim/{backup,tmp},.logs,.local/{bin,share/zsh}} &> /dev/null
-}
 # }}}
 # Deploy {{{
 
 function infect_deploy() {
-  local src=${1:-${INFECT_DIR:-$default_infect_dir}}
-  local dest=${2:-${INFECT_WEB_DIR:-$default_infect_web_dir}}
-  local current="current.tar.gz"
-  local file="$(date +"%Y.%m.%d").tar.gz"
+  local src=${1:-${INFECT_DIR}}
+  local dest=${2:-${INFECT_WEB_DIR}}
+  local current="current.tgz"
+  local file="$(date +"%Y.%m.%d").tgz"
 
   echo "Deploying to $dest..."
   if [[ ! -d $dest ]]; then
     # Create the directory or crash.
-    if ! mkdir -p $dest ; then
+    if ! mkdir -p $dest; then
       echo "Error: Could not create destination directory. Aborting deploy."
       return 127
     fi
@@ -151,21 +96,30 @@ function infect_deploy() {
 
   cd $dest
 
-  if [[ ! -f index.html ]]; then
-    echo "Installing infect script as index.html"
-    cp $self ./index.html
+  echo "Installing current infect script as index.html"
+  cp $SELF ./index.html
+
+  if [[ -f $file ]]; then
+    echo "Removing already deployed $file"
+    rm $file
   fi
 
   local exc=""
-  for p in ${(z)INFECT_RSYNC_EXCLUDE:-$default_infect_rsync_exclude} ; do
+  for p in ${(z)INFECT_RSYNC_EXCLUDE}; do
     exc+="--exclude=$p "
   done
 
   echo "Rsyncing..."
   rsync $src ./stage -a ${(z)exc} || return 1
 
+  # This here with getting a sane structure in tarballs...
+  cd stage
   echo "Compressing..."
-  tar czf $file stage/ --transform 's/stage\///' --remove-files || return 1
+  tar czf $file * || return 1
+  mv $file ..
+
+  cd ..
+  rm -r stage
 
   if [[ -L "$current" ]]; then
     echo "Unlinking old..."
@@ -179,75 +133,130 @@ function infect_deploy() {
 }
 
 # }}}
-# web.zsh {{{
+# Download / Update {{{
 
 function infect_update() {
-file="current.tar.gz"
-target="etc"
+  local file="current.tgz"
+  local target=$INFECT_DIR:t
+  local repofile=$target/$INFECT_REPO_FILE
 
-# Download and extract the tar file
-echo "Downloading..."
-curl --silent http://etc.ninjaloot.se/$file -O
-echo "Extracting..."
-tar xzf $file
-rm $file
+  if [[ -f $INFECT_RC_FILE ]]; then
+    local dir=$(<$INFECT_RC_FILE)
+    echo "Going to $dir..."
+    cd $dir/..
+  fi
 
-if [ -n "$1" ]; then
-  cd etc
+  # Download and extract the tar file
+  echo "Downloading..."
+  curl --silent $INFECT_HOST/$file -O || return 1
 
-  echo $1 > .local
-  echo "Downloading $1/conf-local master zip file..."
-  curl --silent https://nodeload.github.com/$1/conf-local/zip/master -O
+  echo "Extracting..."
+  tar xzf $file || return 1
+  rm $file
 
-  echo "Unzipping..."
-  unzip master &> /dev/null
+  if [[ -n "$1" ]] || [[ -f $repofile ]]; then
+    if [[ -f $repofile ]]; then
+      local repo=$(<$repofile)
+    else
+      local repo=$1
+      echo $repo > $repofile
+    fi
 
-  echo "Syncing local files..."
-  rsync -r ./conf-local-master/* .
-  rm -r master conf-local-master
+    if [[ ! $repo =~ '/' ]]; then
+      repo+="/conf-local"
+    fi
 
-  cd ..
-fi
+    cd $target
 
-# If using old structure, sync to it.
-if [ -d "./config" ]; then
-  echo "Syncing..."
-  target="config"
-  rsync -r ./etc/* ./config
-  rm -r etc
-fi
+    echo "Downloading $repo master zip file..."
+    curl --silent https://nodeload.github.com/$repo/zip/master -O || return 1
 
-cd $target
-echo "Installing..."
-./install.zsh
+    echo "Unzipping..."
+    unzip -qq master || return 1
 
-echo "All done! You're up to date, baby! \o/"
+    echo "Mutating..."
+    rsync -r ./conf-local-master/* . || return 1
+    rm -r master conf-local-master
+
+    cd ..
+  fi
+
+  # XXX: Fix this shit
+  # If using old structure, sync to it.
+  if [[ -d "./config" ]]; then
+    echo "Syncing..."
+    rsync -r ./etc/* ./config
+    rm -r etc
+  fi
+
+  infect_install $target || return 1
+  echo "Infection complete."
 }
+
+# }}}
+# Uninstall {{{
+
+function infect_uninstall() {
+  typeset -A apps
+  typeset -A dest
+  typeset -A force
+
+  local dir=${1:-$PWD}
+  source $dir/*.src
+
+  for app in ${(ko)apps}; do
+    infect_unlink ${(z)${apps[$app]}}
+  done
+}
+
+function infect_unlink() {
+  while [[ -n "$1" ]]; do
+    local target=$1
+    local dst=$dest[$target]
+
+    if [[ -n "$dst" ]]; then
+      _unlink $dst || return 1
+      # Non-home target. Make sure to remove empty parent directories!
+      dst=$dst:h
+      while rmdir $dst &> /dev/null; do
+        print -P "%B%F{12}$dst%f%b removed"
+        dst=$dst:h
+      done
+    else
+      _unlink "$HOME/.$target:t" || return 1
+    fi
+    shift
+  done
+}
+
+function _unlink() {
+  if [[ -L $1 ]]; then
+    unlink $1 || return 1
+    print -P "%B%F{11}$1%f%b unlinked"
+  fi
+}
+
 # }}}
 
 # Runtime case selection {{{
 
-# No arguments given. Assume script is piped from curl; download and install
-if [[ -z "$1" ]]; then
-  infect_update
-  exit 0
+arg=$1
+if [[ -n "$1" ]]; then
+  shift
 fi
 
-arg=$1
-shift
-
 case $arg in
-  symlink)
-    infect_symlink $* ; ;;
+  install)
+    infect_install $*;;
 
   deploy)
-    infect_deploy $* ; ;;
+    infect_deploy $*;;
 
-  mutate)
-    infect_mutate $* ; ;;
+  uninstall)
+    infect_uninstall $*;;
 
   *)
-    infect_help ; ;;
+    infect_update $arg;;
 esac
 
 # }}}
