@@ -29,6 +29,7 @@ function infect_install() {
   source $dir/*.src
 
   # Create symlinks for applications found on the system
+  iecho "Installing symbolic links"
   for app in ${(ko)apps}; do
     if [[ -x $commands[$app] ]] || [[ -n "$force[$app]" ]]; then
       infect_symlink ${(z)${apps[$app]}}
@@ -65,12 +66,12 @@ function infect_symlink() {
         mkdir -p $backup
       fi
       mv $dst $backup
-      print -P "Backed up original %B%F{10}${dst}%f%b"
+      iecho "Backed up original %F{green}${dst}%f"
     fi
 
     mkdir -p $dst:h &> /dev/null
     ln -s $src:a $dst:a
-    print -P "%B%F{10}$1%f%b installed to %B%F{12}${dst}%b"
+    iecho "%F{green}$1%F{white} -> %F{blue}${dst}"
 
     shift
   done
@@ -85,22 +86,22 @@ function infect_deploy() {
   local current="current.tgz"
   local file="$(date +"%Y.%m.%d").tgz"
 
-  echo "Deploying to $dest..."
+  iecho "Deploying to %F{blue}$dest%f..."
   if [[ ! -d $dest ]]; then
     # Create the directory or crash.
     if ! mkdir -p $dest; then
-      echo "Error: Could not create destination directory. Aborting deploy."
+      iecho "Error: Could not create destination directory. Aborting deploy." red
       return 127
     fi
   fi
 
   cd $dest
 
-  echo "Installing current infect script as index.html"
+  iecho "Installing current infect script as %F{magenta}index.html%f"
   cp $SELF ./index.html
 
   if [[ -f $file ]]; then
-    echo "Removing already deployed $file"
+    iecho "Removing already deployed %F{yellow}$file%f"
     rm $file
   fi
 
@@ -109,12 +110,12 @@ function infect_deploy() {
     exc+="--exclude=$p "
   done
 
-  echo "Rsyncing..."
+  iecho "Rsyncing..."
   rsync $src ./stage -a ${(z)exc} || return 1
 
   # This here with getting a sane structure in tarballs...
   cd stage
-  echo "Compressing..."
+  iecho "Compressing..."
   tar czf $file * || return 1
   mv $file ..
 
@@ -122,14 +123,14 @@ function infect_deploy() {
   rm -r stage
 
   if [[ -L "$current" ]]; then
-    echo "Unlinking old..."
+    iecho "Unlinking old current..."
     unlink $current
   fi
 
-  echo "Linking new..."
+  iecho "Linking new current..."
   ln -s $file $current
 
-  echo "Done! Deploy was made!"
+  iecho "Deploy complete. %F{red}<3%f"
 }
 
 # }}}
@@ -142,24 +143,24 @@ function infect_update() {
 
   if [[ -f $INFECT_RC_FILE ]]; then
     local dir=$(<$INFECT_RC_FILE)
-    echo "Going to $dir..."
+    iecho "Going to %F{blue}$dir%f..."
     cd $dir/..
   fi
 
   # Download and extract the tar file
-  echo "Downloading..."
+  iecho "Downloading..."
   curl --silent $INFECT_HOST/$file -O || return 1
 
-  echo "Extracting..."
+  iecho "Extracting..."
   tar xzf $file || return 1
   rm $file
 
   if [[ -n "$1" ]] || [[ -f $repofile ]]; then
-    if [[ -f $repofile ]]; then
-      local repo=$(<$repofile)
-    else
+    if [[ -n "$1" ]]; then
       local repo=$1
       echo $repo > $repofile
+    elif [[ -f $repofile ]]; then
+      local repo=$(<$repofile)
     fi
 
     if [[ ! $repo =~ '/' ]]; then
@@ -168,13 +169,13 @@ function infect_update() {
 
     cd $target
 
-    echo "Downloading $repo master zip file..."
+    iecho "Downloading %F{cyan}$repo%f master zip file..."
     curl --silent https://nodeload.github.com/$repo/zip/master -O || return 1
 
-    echo "Unzipping..."
+    iecho "Unzipping..."
     unzip -qq master || return 1
 
-    echo "Mutating..."
+    iecho "Mutating..."
     rsync -r ./conf-local-master/* . || return 1
     rm -r master conf-local-master
 
@@ -184,13 +185,13 @@ function infect_update() {
   # XXX: Fix this shit
   # If using old structure, sync to it.
   if [[ -d "./config" ]]; then
-    echo "Syncing..."
+    iecho "Syncing..."
     rsync -r ./etc/* ./config
     rm -r etc
   fi
 
   infect_install $target || return 1
-  echo "Infection complete."
+  iecho "Infection complete. %F{red}<3%f"
 }
 
 # }}}
@@ -204,6 +205,7 @@ function infect_uninstall() {
   local dir=${1:-$PWD}
   source $dir/*.src
 
+  iecho "Uninstalling symbolic links"
   for app in ${(ko)apps}; do
     infect_unlink ${(z)${apps[$app]}}
   done
@@ -219,7 +221,7 @@ function infect_unlink() {
       # Non-home target. Make sure to remove empty parent directories!
       dst=$dst:h
       while rmdir $dst &> /dev/null; do
-        print -P "%B%F{12}$dst%f%b removed"
+        iecho "Removing  %F{magenta}$dst%f"
         dst=$dst:h
       done
     else
@@ -231,9 +233,17 @@ function infect_unlink() {
 
 function _unlink() {
   if [[ -L $1 ]]; then
+    iecho "Unlinking %F{cyan}$1%f"
     unlink $1 || return 1
-    print -P "%B%F{11}$1%f%b unlinked"
   fi
+}
+
+# }}}
+# Interface {{{
+
+function iecho() {
+  local color=${2:-white}
+  print -P "%B%F{black}-> %F{${color}}${1}%f%b"
 }
 
 # }}}
