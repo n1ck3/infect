@@ -170,7 +170,7 @@ function infect_update() {
     cd $target
 
     iecho "Downloading %F{cyan}$repo%f master zip file..."
-    curl --silent https://nodeload.github.com/$repo/zip/master -O || return 1
+    curl --silent https://codeload.github.com/$repo/zip/master -O || return 1
 
     iecho "Unzipping..."
     unzip -qq master || return 1
