@@ -176,7 +176,7 @@ function infect_update() {
     unzip -qq master || return 1
 
     iecho "Mutating..."
-    rsync -r ./conf-local-master/* . || return 1
+    rsync -ru --links ./conf-local-master/* . || return 1
     rm -r master conf-local-master
 
     cd ..
